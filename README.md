@@ -156,7 +156,7 @@ apex_config:
       lines:
         show: true
 ```
-## buymeacoffee.com/jakubhruby
+## http://buymeacoffee.com/jakubhruby
 
 
 <img width="150" height="150" alt="qr-code" src="https://github.com/user-attachments/assets/2581bf36-7f7d-4745-b792-d1abaca6e57d" />
