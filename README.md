@@ -1,6 +1,3 @@
-# spot-SK
-
-
 # SK Spot Price - Home Assistant Integration
 
 Integrace pro Home Assistant zobrazující aktuální spotové ceny elektřiny ze slovenského trhu (OKTE).
