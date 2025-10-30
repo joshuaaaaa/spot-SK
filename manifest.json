@@ -1,0 +1,10 @@
+{
+  "domain": "sk_spot",
+  "name": "SK Spot Price",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "",
+  "requirements": ["openpyxl==3.1.2"],
+  "version": "1.0.0",
+  "iot_class": "cloud_polling"
+}
