@@ -127,7 +127,7 @@ apex_config:
     y:
       title:
         formatter: "function() { return 'Cena'; }"
-      formatter: "function(value) { return (value !== null && !isNaN(value)) ? value.toFixed(2) + ' Kč/kWh' : ''; }"
+      formatter: "function(value) { return (value !== null && !isNaN(value)) ? value.toFixed(2) + ' €/kWh' : ''; }"
   legend:
     show: false
   yaxis:
