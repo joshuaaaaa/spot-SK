@@ -39,6 +39,9 @@ automation:
 
 ## Vizualizace pomocí ApexCharts
 
+<img width="450" height="521" alt="image" src="https://github.com/user-attachments/assets/70a4dded-b13c-48e8-9c39-dab0e856d860" />
+
+
 Pro zobrazení grafu cen nainstalujte [ApexCharts Card](https://github.com/RomRider/apexcharts-card) a použijte tuto konfiguraci:
 ```yaml
 type: custom:apexcharts-card
