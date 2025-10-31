@@ -62,35 +62,36 @@ all_series_config:
     extremas: true
     in_brush: true
   float_precision: 2
-  type: area
+  type: column
   invert: false
   fill_raw: last
   color_threshold:
     - value: -1
-      color: 1E90FF
+      color: "#1E90FF"
     - value: 2.5
-      color: "008000"
+      color: "#008000"
     - value: 3.5
-      color: DAA520
+      color: "#DAA520"
     - value: 4.5
-      color: FF0000
+      color: "#FF0000"
 now:
   show: true
   label: Now
   color: red
 series:
   - entity: sensor.sk_spot_price
-    name: Aktuální hodina
+    name: Cena elektřiny
     opacity: 0.7
     extend_to: now
     type: column
     show:
       in_header: raw
-    data_generator: |
-      return Object.entries(entity.attributes).map(([date, value], index) => {
-        return [new Date(date).getTime(), value];
-      });
-       
+    data_generator: >
+      return Object.entries(entity.attributes)
+        .filter(([date, value]) => !isNaN(parseFloat(value)))
+        .map(([date, value]) => {
+          return [new Date(date).getTime(), parseFloat(value)];
+        });
 apex_config:
   chart:
     height: 400px
@@ -113,10 +114,19 @@ apex_config:
           color: "#0D47A1"
           opacity: 0.4
           width: 1
+  tooltip:
+    enabled: true
+    shared: true
+    followCursor: false
+    x:
+      show: true
+      format: dd.MM.yyyy HH:mm
+    y:
+      title:
+        formatter: "function() { return 'Cena'; }"
+      formatter: "function(value) { return (value !== null && !isNaN(value)) ? value.toFixed(2) + ' Kč/kWh' : ''; }"
   legend:
     show: false
-    floating: true
-    offsetY: 25
   yaxis:
     opposite: false
     reversed: false
@@ -133,19 +143,15 @@ apex_config:
       show: true
       rotate: -45
       rotateAlways: true
-    logarithmic: true
+      datetimeFormatter:
+        hour: HH:mm
   stroke:
     show: true
     curve: stepline
     lineCap: butt
-    colors: undefined
   plotOptions:
-    candlestick:
-      colors:
-        upward: "#00B746"
-        downward: "#EF403C"
-      wick:
-        useFillColor: true
+    bar:
+      columnWidth: 90%
   markers:
     size: 0
   grid:
@@ -155,6 +161,7 @@ apex_config:
     xaxis:
       lines:
         show: true
+
 ```
 ## http://buymeacoffee.com/jakubhruby
 
