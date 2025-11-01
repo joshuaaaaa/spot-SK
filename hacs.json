@@ -1,0 +1,7 @@
+{
+  "name": "SK Spot Price",
+  "content_in_root": false,
+  "domains": ["sensor"],
+  "render_readme": true,
+  "zip_release": true
+}
