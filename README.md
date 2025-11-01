@@ -11,12 +11,13 @@ Integrace pro Home Assistant zobrazující aktuální spotové ceny elektřiny z
 - Volba jednotek: EUR/MWh nebo EUR/kWh
 - Atributy s časovými razítky pro snadné použití v automatizacích
 
-## Installation (HACS)
+## Instalace (HACS)
 
-1. Add this repository to HACS as a custom repository.
-2. Install **SK Spot Price** integration.
-3. Restart Home Assistant.
-4. Add integration via **Settings → Devices & Services → Add Integration → SK Spot**.
+1. Přidej tento repozitář do HACS jako vlastní repozitář.
+2. Nainstaluj **SK Spot Price** integraci.
+3. Restartuj Home Assistant.
+4. Přidej integraci přes ** Nastavení → Zařízení a služby → Přidat integraci → SK Spot**.
+
 
 ## Instalace manuální
 
