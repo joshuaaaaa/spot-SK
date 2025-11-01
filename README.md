@@ -16,7 +16,7 @@ Integrace pro Home Assistant zobrazující aktuální spotové ceny elektřiny z
 1. Přidej tento repozitář do HACS jako vlastní repozitář.
 2. Nainstaluj **SK Spot Price** integraci.
 3. Restartuj Home Assistant.
-4. Přidej integraci přes ** Nastavení → Zařízení a služby → Přidat integraci → SK Spot**.
+4. Přidej integraci přes **Nastavení → Zařízení a služby → Přidat integraci → SK Spot**.
 
 
 ## Instalace manuální
