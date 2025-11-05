@@ -49,6 +49,7 @@ class SKSpotCoordinator(DataUpdateCoordinator):
         self._last_download_date = None
         self._today_prices = {}
         self._tomorrow_prices = {}
+        self._tomorrow_available = False  # Nový příznak
 
     async def _async_update_data(self):
         """Stáhni data."""
@@ -62,18 +63,19 @@ class SKSpotCoordinator(DataUpdateCoordinator):
                 should_download = True
         
         # Nebo pokud nemáme žádná data
-        if not self._today_prices and not self._tomorrow_prices:
+        if not self._today_prices:
             should_download = True
 
         if should_download:
             try:
                 await self._fetch_prices(today)
                 self._last_download_date = today
-                _LOGGER.info("Staženo nových cen pro dnes (%d) a zítra (%d)", 
-                           len(self._today_prices), len(self._tomorrow_prices))
+                _LOGGER.info("Staženo nových cen pro dnes (%d) a zítra (%s)", 
+                           len(self._today_prices), 
+                           f"{len(self._tomorrow_prices)} - dostupné" if self._tomorrow_available else "nedostupné")
             except Exception as err:
                 _LOGGER.error("Chyba při stahování: %s", err)
-                if not self._today_prices and not self._tomorrow_prices:
+                if not self._today_prices:
                     raise UpdateFailed(f"Chyba: {err}") from err
         
         # Určení aktuální ceny podle 15minutového intervalu
@@ -82,22 +84,17 @@ class SKSpotCoordinator(DataUpdateCoordinator):
         # Vypočítat index 15minutového intervalu (0-95)
         quarter_index = (current_hour * 4) + (current_minute // 15)
         
-        tomorrow = today + timedelta(days=1)
-        
         # Pokud je dnes a máme data
         if self._today_prices:
             current_price = self._today_prices.get(quarter_index)
         else:
             current_price = 0
         
-        # Pokud nemáme zítřejší data, nastavíme 0
-        if not self._tomorrow_prices:
-            self._tomorrow_prices = {i: 0 for i in range(96)}
-        
         return {
             "current_price": current_price if current_price is not None else 0,
             "today_prices": self._today_prices,
-            "tomorrow_prices": self._tomorrow_prices,
+            "tomorrow_prices": self._tomorrow_prices if self._tomorrow_available else {},
+            "tomorrow_available": self._tomorrow_available,
             "last_update": now.isoformat(),
         }
 
@@ -110,14 +107,18 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             self._today_prices = await self._fetch_day_prices(today)
         except Exception as err:
             _LOGGER.warning("Nelze stáhnout dnešní ceny: %s", err)
-            self._today_prices = {i: 0 for i in range(96)}
+            self._today_prices = {}
+            raise  # Propaguj chybu pokud ani dnes nejde stáhnout
         
         # Stáhnout zítřejší ceny
         try:
             self._tomorrow_prices = await self._fetch_day_prices(tomorrow)
+            self._tomorrow_available = True
+            _LOGGER.info("Zítřejší ceny úspěšně staženy")
         except Exception as err:
-            _LOGGER.warning("Nelze stáhnout zítřejší ceny (možná ještě nejsou dostupné): %s", err)
-            self._tomorrow_prices = {i: 0 for i in range(96)}
+            _LOGGER.info("Zítřejší ceny ještě nejsou dostupné: %s", err)
+            self._tomorrow_prices = {}
+            self._tomorrow_available = False
 
     async def _fetch_day_prices(self, date):
         """Stáhni ceny pro konkrétní den."""
@@ -206,6 +207,7 @@ class SKSpotSensor(CoordinatorEntity, SensorEntity):
         
         today_prices = self.coordinator.data.get("today_prices", {})
         tomorrow_prices = self.coordinator.data.get("tomorrow_prices", {})
+        tomorrow_available = self.coordinator.data.get("tomorrow_available", False)
         
         now = dt_util.now()
         today_date = now.date()
@@ -232,26 +234,24 @@ class SKSpotSensor(CoordinatorEntity, SensorEntity):
                     
                 all_prices[iso_time] = price
         
-        # Přidat zítřejší ceny - pouze pokud existují a nejsou 0
-        for idx in range(96):
-            hour = idx // 4
-            minute = (idx % 4) * 15
-            
-            if idx in tomorrow_prices:
-                price = tomorrow_prices[idx]
-                # Přeskočit pokud je cena 0 (nedostupná data)
-                if price == 0:
-                    continue
-                    
-                dt = datetime.combine(tomorrow_date, time(hour, minute))
-                dt = dt_util.as_local(dt_util.as_utc(dt))
-                iso_time = dt.isoformat()
+        # Přidat zítřejší ceny - POUZE pokud jsou skutečně dostupné
+        if tomorrow_available and tomorrow_prices:
+            for idx in range(96):
+                hour = idx // 4
+                minute = (idx % 4) * 15
                 
-                if self._unit == UNIT_KWH:
-                    price = round(price / 1000, 2)
-                else:
-                    price = round(price, 2)
+                if idx in tomorrow_prices:
+                    price = tomorrow_prices[idx]
+                        
+                    dt = datetime.combine(tomorrow_date, time(hour, minute))
+                    dt = dt_util.as_local(dt_util.as_utc(dt))
+                    iso_time = dt.isoformat()
                     
-                all_prices[iso_time] = price
+                    if self._unit == UNIT_KWH:
+                        price = round(price / 1000, 2)
+                    else:
+                        price = round(price, 2)
+                        
+                    all_prices[iso_time] = price
         
         return all_prices
