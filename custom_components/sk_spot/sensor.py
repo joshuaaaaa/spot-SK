@@ -55,13 +55,30 @@ class SKSpotCoordinator(DataUpdateCoordinator):
         """Stáhni data."""
         now = dt_util.now()
         today = now.date()
-        
+
+        # Pokud se změnil den (po půlnoci), posuň zítřejší ceny na dnešní
+        if self._last_download_date is not None and self._last_download_date < today:
+            _LOGGER.info("Den se změnil z %s na %s - posouváme zítřejší ceny na dnešní",
+                        self._last_download_date, today)
+            # Přesuň včerejší "zítřejší" ceny na dnešní "dnešní" ceny
+            if self._tomorrow_available and self._tomorrow_prices:
+                self._today_prices = self._tomorrow_prices.copy()
+                _LOGGER.info("Přesunuto %d zítřejších cen na dnešní", len(self._today_prices))
+            else:
+                # Pokud jsme neměli zítřejší ceny, vynuluj dnešní
+                self._today_prices = {}
+            # Vyčisti zítřejší data
+            self._tomorrow_prices = {}
+            self._tomorrow_available = False
+            # Nastav, že jsme ještě dnes nestahovali
+            self._last_download_date = None
+
         # Stáhni pokud je po 13:05 a ještě jsme dnes nestahovali
         should_download = False
         if now.time() >= time(13, 5):
             if self._last_download_date != today:
                 should_download = True
-        
+
         # Nebo pokud nemáme žádná data
         if not self._today_prices:
             should_download = True
@@ -234,24 +251,25 @@ class SKSpotSensor(CoordinatorEntity, SensorEntity):
                     
                 all_prices[iso_time] = price
         
-        # Přidat zítřejší ceny - POUZE pokud jsou skutečně dostupné
-        if tomorrow_available and tomorrow_prices:
+        # Přidat zítřejší ceny - POUZE pokud jsou skutečně dostupné A je po 13:00
+        # (Data se zveřejňují každý den ve 13:00)
+        if tomorrow_available and tomorrow_prices and now.time() >= time(13, 0):
             for idx in range(96):
                 hour = idx // 4
                 minute = (idx % 4) * 15
-                
+
                 if idx in tomorrow_prices:
                     price = tomorrow_prices[idx]
-                        
+
                     dt = datetime.combine(tomorrow_date, time(hour, minute))
                     dt = dt_util.as_local(dt_util.as_utc(dt))
                     iso_time = dt.isoformat()
-                    
+
                     if self._unit == UNIT_KWH:
                         price = round(price / 1000, 2)
                     else:
                         price = round(price, 2)
-                        
+
                     all_prices[iso_time] = price
         
         return all_prices
