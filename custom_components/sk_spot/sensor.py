@@ -47,9 +47,20 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             update_interval=SCAN_INTERVAL,
         )
         self._last_download_date = None
+        self._last_failed_attempt = None  # Čas posledního neúspěšného pokusu
         self._today_prices = {}
         self._tomorrow_prices = {}
         self._tomorrow_available = False  # Nový příznak
+
+    def _validate_price_data(self, prices):
+        """Zkontroluj zda jsou data validní (máme všech 96 záznamů pro celý den)."""
+        if not prices:
+            return False
+        # Měli bychom mít 96 záznamů (24 hodin * 4 čtvrthodiny)
+        # Kontrola, že máme alespoň 90 záznamů (95% úplnosti)
+        if len(prices) < 90:
+            return False
+        return True
 
     async def _async_update_data(self):
         """Stáhni data."""
@@ -72,6 +83,11 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             self._tomorrow_available = False
             # Nastav, že jsme ještě dnes nestahovali
             self._last_download_date = None
+            # Resetuj i failed attempt aby se mohl pokusit stáhnout nová data
+            self._last_failed_attempt = None
+
+        # Kontrola zda máme validní data pro dnešek
+        has_valid_today_data = self._validate_price_data(self._today_prices)
 
         # Stáhni pokud je po 13:05 a ještě jsme dnes nestahovali
         should_download = False
@@ -79,21 +95,36 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             if self._last_download_date != today:
                 should_download = True
 
-        # Nebo pokud nemáme žádná data
-        if not self._today_prices:
+        # Nebo pokud nemáme validní data pro dnešek
+        if not has_valid_today_data:
             should_download = True
+            _LOGGER.warning("Dnešní data nejsou validní nebo chybí (máme %d/96 záznamů)",
+                          len(self._today_prices))
+
+        # Pokud měl poslední pokus o stažení chybu, zkus to znovu za 15 minut
+        if self._last_failed_attempt is not None:
+            time_since_failure = (now - self._last_failed_attempt).total_seconds()
+            if time_since_failure >= 900:  # 15 minut = 900 sekund
+                should_download = True
+                _LOGGER.info("Minulo 15 minut od posledního neúspěšného pokusu, zkouším znovu")
 
         if should_download:
             try:
                 await self._fetch_prices(today)
+                # Pouze pokud stahování uspělo, označ dnešek jako stažený
                 self._last_download_date = today
-                _LOGGER.info("Staženo nových cen pro dnes (%d) a zítra (%s)", 
-                           len(self._today_prices), 
+                self._last_failed_attempt = None  # Vynuluj failed attempt
+                _LOGGER.info("Staženo nových cen pro dnes (%d) a zítra (%s)",
+                           len(self._today_prices),
                            f"{len(self._tomorrow_prices)} - dostupné" if self._tomorrow_available else "nedostupné")
             except Exception as err:
                 _LOGGER.error("Chyba při stahování: %s", err)
-                if not self._today_prices:
+                self._last_failed_attempt = now  # Zaznamenej čas selhání
+                # Pokud nemáme vůbec žádná data, vyvolej chybu
+                if not has_valid_today_data:
                     raise UpdateFailed(f"Chyba: {err}") from err
+                # Jinak pokračuj se starými daty a zkus to znovu za 15 minut
+                _LOGGER.warning("Používám stará data, další pokus za 15 minut")
         
         # Určení aktuální ceny podle 15minutového intervalu
         current_hour = now.hour
