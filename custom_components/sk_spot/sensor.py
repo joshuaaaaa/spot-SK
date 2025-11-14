@@ -98,8 +98,13 @@ class SKSpotCoordinator(DataUpdateCoordinator):
         # Nebo pokud nemáme validní data pro dnešek
         if not has_valid_today_data:
             should_download = True
-            _LOGGER.warning("Dnešní data nejsou validní nebo chybí (máme %d/96 záznamů)",
-                          len(self._today_prices))
+            # Logovat WARNING pouze po 13:05, jinak DEBUG (data ještě nejsou k dispozici)
+            if now.time() >= time(13, 5):
+                _LOGGER.warning("Dnešní data nejsou validní nebo chybí (máme %d/96 záznamů)",
+                              len(self._today_prices))
+            else:
+                _LOGGER.debug("Dnešní data ještě nejsou k dispozici (máme %d/96 záznamů), čekáme do 13:05",
+                            len(self._today_prices))
 
         # Pokud měl poslední pokus o stažení chybu, zkus to znovu za 15 minut
         if self._last_failed_attempt is not None:
@@ -120,11 +125,14 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             except Exception as err:
                 _LOGGER.error("Chyba při stahování: %s", err)
                 self._last_failed_attempt = now  # Zaznamenej čas selhání
-                # Pokud nemáme vůbec žádná data, vyvolej chybu
-                if not has_valid_today_data:
+                # Pokud nemáme vůbec žádná data, vyvolej chybu (ale jen po 13:05)
+                if not has_valid_today_data and now.time() >= time(13, 5):
                     raise UpdateFailed(f"Chyba: {err}") from err
-                # Jinak pokračuj se starými daty a zkus to znovu za 15 minut
-                _LOGGER.warning("Používám stará data, další pokus za 15 minut")
+                # Jinak pokračuj a zkus to znovu za 15 minut
+                if has_valid_today_data:
+                    _LOGGER.warning("Používám stará data, další pokus za 15 minut")
+                else:
+                    _LOGGER.info("Nemám žádná data, další pokus za 15 minut (před 13:05 je to normální)")
         
         # Určení aktuální ceny podle 15minutového intervalu
         current_hour = now.hour
