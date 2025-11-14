@@ -48,6 +48,7 @@ class SKSpotCoordinator(DataUpdateCoordinator):
         )
         self._last_download_date = None
         self._last_failed_attempt = None  # Čas posledního neúspěšného pokusu
+        self._last_tomorrow_attempt = None  # Čas posledního pokusu o zítřejší data
         self._today_prices = {}
         self._tomorrow_prices = {}
         self._tomorrow_available = False  # Nový příznak
@@ -85,6 +86,7 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             self._last_download_date = None
             # Resetuj i failed attempt aby se mohl pokusit stáhnout nová data
             self._last_failed_attempt = None
+            self._last_tomorrow_attempt = None
 
         # Kontrola zda máme validní data pro dnešek
         has_valid_today_data = self._validate_price_data(self._today_prices)
@@ -94,6 +96,17 @@ class SKSpotCoordinator(DataUpdateCoordinator):
         if now.time() >= time(13, 5):
             if self._last_download_date != today:
                 should_download = True
+            # Nebo pokud nemáme zítřejší data (API je zveřejňuje mezi 13:00-14:00)
+            # Zkusit to znovu max každých 15 minut
+            elif not self._tomorrow_available:
+                if self._last_tomorrow_attempt is None:
+                    should_download = True
+                    _LOGGER.info("Zítřejší data ještě nejsou dostupná, zkouším poprvé")
+                else:
+                    time_since_tomorrow_attempt = (now - self._last_tomorrow_attempt).total_seconds()
+                    if time_since_tomorrow_attempt >= 900:  # 15 minut
+                        should_download = True
+                        _LOGGER.info("Zítřejší data stále nejsou dostupná, zkouším znovu (po 15 minutách)")
 
         # Nebo pokud nemáme validní data pro dnešek
         if not has_valid_today_data:
@@ -157,20 +170,23 @@ class SKSpotCoordinator(DataUpdateCoordinator):
     async def _fetch_prices(self, today):
         """Stáhni a parsuj XLSX pro dnes a zítra."""
         tomorrow = today + timedelta(days=1)
-        
+        now = dt_util.now()
+
         # Stáhnout dnešní ceny
         try:
             self._today_prices = await self._fetch_day_prices(today)
+            _LOGGER.info("Dnešní ceny úspěšně staženy: %d záznamů", len(self._today_prices))
         except Exception as err:
             _LOGGER.warning("Nelze stáhnout dnešní ceny: %s", err)
             self._today_prices = {}
             raise  # Propaguj chybu pokud ani dnes nejde stáhnout
-        
+
         # Stáhnout zítřejší ceny
+        self._last_tomorrow_attempt = now  # Zaznamenej čas pokusu
         try:
             self._tomorrow_prices = await self._fetch_day_prices(tomorrow)
             self._tomorrow_available = True
-            _LOGGER.info("Zítřejší ceny úspěšně staženy")
+            _LOGGER.info("Zítřejší ceny úspěšně staženy: %d záznamů", len(self._tomorrow_prices))
         except Exception as err:
             _LOGGER.info("Zítřejší ceny ještě nejsou dostupné: %s", err)
             self._tomorrow_prices = {}
@@ -179,7 +195,7 @@ class SKSpotCoordinator(DataUpdateCoordinator):
     async def _fetch_day_prices(self, date):
         """Stáhni ceny pro konkrétní den."""
         delivery_date = date.strftime("%Y-%m-%d")
-        
+
         url = (
             f"https://isot.okte.sk/api/v1/dam/report/detailed"
             f"?lang=sk-SK"
@@ -187,22 +203,24 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             f"&deliverydayto={delivery_date}"
             f"&format=xlsx"
         )
-        
-        _LOGGER.debug("Stahuji z: %s", url)
-        
+
+        _LOGGER.debug("Stahuji data pro %s z: %s", delivery_date, url)
+
         timeout = aiohttp.ClientTimeout(total=60)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as response:
                 if response.status != 200:
+                    _LOGGER.error("API vrátilo HTTP %d pro %s", response.status, delivery_date)
                     raise UpdateFailed(f"HTTP {response.status}")
                 content = await response.read()
-        
+                _LOGGER.debug("Staženo %d bytů pro %s", len(content), delivery_date)
+
         # Parse XLSX
         workbook = load_workbook(filename=io.BytesIO(content), data_only=True)
         sheet = workbook.active
-        
+
         prices = {}
-        
+
         # Sloupec K = 11. sloupec (index 11)
         # Data začínají od řádku 2
         # Máme 96 řádků (24h * 4 čtvrthodiny)
@@ -213,11 +231,15 @@ class SKSpotCoordinator(DataUpdateCoordinator):
                     price = float(cell.value)
                     prices[row_idx] = round(price, 4)
                 except (ValueError, TypeError):
+                    _LOGGER.warning("Nelze parsovat cenu na řádku %d pro %s: %s",
+                                   row_idx + 2, delivery_date, cell.value)
                     continue
-        
+
         if not prices:
+            _LOGGER.error("XLSX pro %s neobsahuje žádná data", delivery_date)
             raise UpdateFailed("Žádná data v XLSX")
-        
+
+        _LOGGER.debug("Naparsováno %d cen pro %s", len(prices), delivery_date)
         return prices
 
 
@@ -310,5 +332,7 @@ class SKSpotSensor(CoordinatorEntity, SensorEntity):
                         price = round(price, 2)
 
                     all_prices[iso_time] = price
-        
+
+        _LOGGER.debug("Atributy obsahují %d záznamů (dnes: %d, zítra: %d, zítra dostupné: %s)",
+                     len(all_prices), len(today_prices), len(tomorrow_prices), tomorrow_available)
         return all_prices
