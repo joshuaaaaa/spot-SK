@@ -1,5 +1,6 @@
 """SK Spot sensor."""
 from datetime import datetime, timedelta, time
+from random import randint
 import logging
 import io
 
@@ -9,6 +10,7 @@ import aiohttp
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import event
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -21,7 +23,10 @@ from .const import DOMAIN, CONF_UNIT, UNIT_MWH, UNIT_KWH
 
 _LOGGER = logging.getLogger(__name__)
 
-SCAN_INTERVAL = timedelta(minutes=1)
+# Čas, kdy by data měla být publikována (13:05 slovenského času)
+DATA_AVAILABLE_TIME = time(13, 5)
+# Náhodné zpoždění (0-120 sekund) pro prevenci synchronizace všech uživatelů
+JITTER_SECONDS = 120
 
 
 async def async_setup_entry(
@@ -33,6 +38,8 @@ async def async_setup_entry(
     coordinator = SKSpotCoordinator(hass)
     await coordinator.async_config_entry_first_refresh()
     async_add_entities([SKSpotSensor(coordinator, entry)])
+    # Naplánuj první automatickou aktualizaci
+    coordinator.schedule_next_update()
 
 
 class SKSpotCoordinator(DataUpdateCoordinator):
@@ -44,14 +51,12 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name="SK Spot",
-            update_interval=SCAN_INTERVAL,
         )
+        self._update_schedule = None  # Handle pro naplánovanou aktualizaci
         self._last_download_date = None
-        self._last_failed_attempt = None  # Čas posledního neúspěšného pokusu
-        self._last_tomorrow_attempt = None  # Čas posledního pokusu o zítřejší data
         self._today_prices = {}
         self._tomorrow_prices = {}
-        self._tomorrow_available = False  # Nový příznak
+        self._tomorrow_available = False
 
     def _validate_price_data(self, prices):
         """Zkontroluj zda jsou data validní (máme všech 96 záznamů pro celý den)."""
@@ -63,6 +68,71 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             return False
         return True
 
+    def has_tomorrow_data(self) -> bool:
+        """Zkontroluj, zda máme data pro zítřek."""
+        if not self._tomorrow_prices:
+            return False
+        # Ověř, že máme validní data (alespoň 90 záznamů)
+        return self._validate_price_data(self._tomorrow_prices)
+
+    def schedule_next_update(self):
+        """Naplánuj další aktualizaci dat."""
+        from zoneinfo import ZoneInfo
+
+        # Zruš předchozí naplánovanou aktualizaci, pokud existuje
+        if self._update_schedule is not None:
+            self._update_schedule()
+            self._update_schedule = None
+
+        utc = ZoneInfo("UTC")
+        bratislava_tz = ZoneInfo("Europe/Bratislava")
+        now_bratislava = dt_util.now(bratislava_tz)
+
+        if self.has_tomorrow_data():
+            # Už máme data pro zítřek, další update bude zítra po 13:05
+            local_target = datetime.combine(
+                (now_bratislava + timedelta(days=1)).date(),
+                DATA_AVAILABLE_TIME,
+                tzinfo=bratislava_tz,
+            )
+            local_target += timedelta(seconds=randint(1, JITTER_SECONDS))
+            _LOGGER.info("Máme zítřejší data, další update: %s", local_target)
+        else:
+            # Nemáme data pro zítřek
+            if DATA_AVAILABLE_TIME < now_bratislava.time():
+                # Čas 13:05 už uplynul dnes, ale nemáme zítřejší data
+                # Zkusíme to znovu za 5 minut
+                local_target = now_bratislava + timedelta(minutes=5)
+                _LOGGER.info("Nemáme zítřejší data, další pokus za 5 minut: %s", local_target)
+            else:
+                # Ještě není 13:05 dnes, naplánuj update na 13:05
+                local_target = datetime.combine(
+                    now_bratislava.date(),
+                    DATA_AVAILABLE_TIME,
+                    tzinfo=bratislava_tz,
+                )
+                local_target += timedelta(seconds=randint(1, JITTER_SECONDS))
+                _LOGGER.info("Další update dnes ve: %s", local_target)
+
+        # Převeď na UTC (správně ošetří letní čas)
+        utc_time = local_target.astimezone(utc)
+
+        # Naplánuj aktualizaci
+        self._update_schedule = event.async_track_point_in_utc_time(
+            hass=self.hass,
+            action=self._on_schedule,
+            point_in_time=utc_time,
+        )
+
+        return utc_time
+
+    async def _on_schedule(self, _):
+        """Callback pro naplánovanou aktualizaci."""
+        _LOGGER.info("Spouštím naplánovanou aktualizaci")
+        await self.async_request_refresh()
+        # Naplánuj další update
+        self.schedule_next_update()
+
     async def _async_update_data(self):
         """Stáhni data."""
         now = dt_util.now()
@@ -73,7 +143,7 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             _LOGGER.info("Den se změnil z %s na %s - posouváme zítřejší ceny na dnešní",
                         self._last_download_date, today)
             # Přesuň včerejší "zítřejší" ceny na dnešní "dnešní" ceny
-            if self._tomorrow_available and self._tomorrow_prices:
+            if self.has_tomorrow_data():
                 self._today_prices = self._tomorrow_prices.copy()
                 _LOGGER.info("Přesunuto %d zítřejších cen na dnešní", len(self._today_prices))
             else:
@@ -84,93 +154,48 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             self._tomorrow_available = False
             # Nastav, že jsme ještě dnes nestahovali
             self._last_download_date = None
-            # Resetuj i failed attempt aby se mohl pokusit stáhnout nová data
-            self._last_failed_attempt = None
-            self._last_tomorrow_attempt = None
 
-        # Kontrola zda máme validní data pro dnešek
-        has_valid_today_data = self._validate_price_data(self._today_prices)
-
-        # Stáhni pokud je po 13:05 a ještě jsme dnes nestahovali
-        should_download = False
-        if now.time() >= time(13, 5):
-            if self._last_download_date != today:
-                should_download = True
-            # Nebo pokud nemáme zítřejší data (API je zveřejňuje mezi 13:00-14:00)
-            # Zkusit to znovu max každých 15 minut
-            elif not self._tomorrow_available:
-                if self._last_tomorrow_attempt is None:
-                    should_download = True
-                    _LOGGER.info("Zítřejší data ještě nejsou dostupná, zkouším poprvé")
-                else:
-                    time_since_tomorrow_attempt = (now - self._last_tomorrow_attempt).total_seconds()
-                    if time_since_tomorrow_attempt >= 900:  # 15 minut
-                        should_download = True
-                        _LOGGER.info("Zítřejší data stále nejsou dostupná, zkouším znovu (po 15 minutách)")
-
-        # Nebo pokud nemáme validní data pro dnešek
-        if not has_valid_today_data:
-            should_download = True
-            # Logovat WARNING pouze po 13:05, jinak DEBUG (data ještě nejsou k dispozici)
-            if now.time() >= time(13, 5):
-                _LOGGER.warning("Dnešní data nejsou validní nebo chybí (máme %d/96 záznamů)",
-                              len(self._today_prices))
-            else:
-                _LOGGER.debug("Dnešní data ještě nejsou k dispozici (máme %d/96 záznamů), čekáme do 13:05",
-                            len(self._today_prices))
-
-        # Pokud měl poslední pokus o stažení chybu, zkus to znovu za 15 minut
-        if self._last_failed_attempt is not None:
-            time_since_failure = (now - self._last_failed_attempt).total_seconds()
-            if time_since_failure >= 900:  # 15 minut = 900 sekund
-                should_download = True
-                _LOGGER.info("Minulo 15 minut od posledního neúspěšného pokusu, zkouším znovu")
+        # Pokud ještě dnes nestahovali, stáhni data
+        should_download = (self._last_download_date != today)
 
         if should_download:
             try:
                 await self._fetch_prices(today)
-                # Pouze pokud stahování uspělo, označ dnešek jako stažený
                 self._last_download_date = today
-                self._last_failed_attempt = None  # Vynuluj failed attempt
                 _LOGGER.info("Staženo nových cen pro dnes (%d) a zítra (%s)",
                            len(self._today_prices),
-                           f"{len(self._tomorrow_prices)} - dostupné" if self._tomorrow_available else "nedostupné")
+                           f"{len(self._tomorrow_prices)} - dostupné" if self.has_tomorrow_data() else "nedostupné")
             except Exception as err:
                 _LOGGER.error("Chyba při stahování: %s", err)
-                self._last_failed_attempt = now  # Zaznamenej čas selhání
-                # Pokud nemáme vůbec žádná data, vyvolej chybu (ale jen po 13:05)
-                if not has_valid_today_data and now.time() >= time(13, 5):
+                # Pokud nemáme vůbec žádná data, vyvolej chybu
+                if not self._validate_price_data(self._today_prices):
                     raise UpdateFailed(f"Chyba: {err}") from err
-                # Jinak pokračuj a zkus to znovu za 15 minut
-                if has_valid_today_data:
-                    _LOGGER.warning("Používám stará data, další pokus za 15 minut")
-                else:
-                    _LOGGER.info("Nemám žádná data, další pokus za 15 minut (před 13:05 je to normální)")
-        
+                # Jinak pokračuj se starými daty
+                _LOGGER.warning("Používám stará data")
+
         # Určení aktuální ceny podle 15minutového intervalu
         current_hour = now.hour
         current_minute = now.minute
         # Vypočítat index 15minutového intervalu (0-95)
         quarter_index = (current_hour * 4) + (current_minute // 15)
-        
+
         # Pokud je dnes a máme data
         if self._today_prices:
             current_price = self._today_prices.get(quarter_index)
         else:
             current_price = 0
-        
+
         return {
             "current_price": current_price if current_price is not None else 0,
             "today_prices": self._today_prices,
-            "tomorrow_prices": self._tomorrow_prices if self._tomorrow_available else {},
-            "tomorrow_available": self._tomorrow_available,
+            "tomorrow_prices": self._tomorrow_prices if self.has_tomorrow_data() else {},
+            "tomorrow_available": self.has_tomorrow_data(),
             "last_update": now.isoformat(),
         }
 
     async def _fetch_prices(self, today):
         """Stáhni a parsuj XLSX pro dnes a zítra."""
         tomorrow = today + timedelta(days=1)
-        now = dt_util.now()
 
         # Stáhnout dnešní ceny
         try:
@@ -182,7 +207,6 @@ class SKSpotCoordinator(DataUpdateCoordinator):
             raise  # Propaguj chybu pokud ani dnes nejde stáhnout
 
         # Stáhnout zítřejší ceny
-        self._last_tomorrow_attempt = now  # Zaznamenej čas pokusu
         try:
             self._tomorrow_prices = await self._fetch_day_prices(tomorrow)
             self._tomorrow_available = True
