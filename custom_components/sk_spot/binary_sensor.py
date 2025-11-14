@@ -28,6 +28,8 @@ async def async_setup_entry(
         SKSpotTomorrowDataSensor(coordinator, entry),
         SKSpotCheapest4BlockSensor(coordinator, entry),
         SKSpotCheapest8BlockSensor(coordinator, entry),
+        SKSpotCheapest4BlockTomorrowSensor(coordinator, entry),
+        SKSpotCheapest8BlockTomorrowSensor(coordinator, entry),
     ])
 
 
@@ -341,3 +343,179 @@ class SKSpotCheapest8BlockSensor(CoordinatorEntity, BinarySensorEntity):
         if self.is_on:
             return "mdi:lightning-bolt"
         return "mdi:lightning-bolt-outline"
+
+
+class SKSpotCheapest4BlockTomorrowSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor pro indikaci nejlevnějšího bloku 4 intervalů (1 hodina) pouze pro zítřek."""
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_name = "SK Spot Cheapest 4 Block Tomorrow"
+        self._attr_unique_id = f"{entry.entry_id}_cheapest_4_block_tomorrow"
+
+    @property
+    def is_on(self) -> bool:
+        """Vrať True pokud jsme v nejlevnějším 4-intervalovém bloku zítřka."""
+        if self.coordinator.data is None:
+            return False
+
+        tomorrow_prices = self.coordinator.data.get("tomorrow_prices", {})
+        tomorrow_available = self.coordinator.data.get("tomorrow_available", False)
+
+        if not tomorrow_available or not tomorrow_prices:
+            return False
+
+        # Najdi nejlevnější blok 4 intervalů pouze v zítřejších datech
+        cheapest = find_cheapest_block(tomorrow_prices, 4)
+        if not cheapest:
+            return False
+
+        start_idx, end_idx, _ = cheapest
+
+        # Zjisti aktuální index
+        now = dt_util.now()
+        current_hour = now.hour
+        current_minute = now.minute
+        current_idx = (current_hour * 4) + (current_minute // 15)
+
+        # Pokud jsme dnes, nejsme v zítřejším bloku
+        today = now.date()
+        if self.coordinator._last_download_date and self.coordinator._last_download_date >= today:
+            return False
+
+        # Jsme v novém dni (po půlnoci), ale data se ještě neposunula
+        # Zítřejší data jsou teď vlastně dnešní
+        return start_idx <= current_idx <= end_idx
+
+    @property
+    def extra_state_attributes(self):
+        """Atributy."""
+        if self.coordinator.data is None:
+            return {}
+
+        tomorrow_prices = self.coordinator.data.get("tomorrow_prices", {})
+        tomorrow_available = self.coordinator.data.get("tomorrow_available", False)
+
+        if not tomorrow_available or not tomorrow_prices:
+            return {}
+
+        cheapest = find_cheapest_block(tomorrow_prices, 4)
+        if not cheapest:
+            return {}
+
+        start_idx, end_idx, avg_price = cheapest
+
+        # Převeď indexy na časy (zítřejší den)
+        now = dt_util.now()
+        tomorrow_date = now.date() + timedelta(days=1)
+
+        start_hour = start_idx // 4
+        start_minute = (start_idx % 4) * 15
+        end_hour = end_idx // 4
+        end_minute = (end_idx % 4) * 15
+
+        start_time = datetime.combine(tomorrow_date, datetime.min.time().replace(hour=start_hour, minute=start_minute))
+        start_time = dt_util.as_local(dt_util.as_utc(start_time))
+
+        end_time = datetime.combine(tomorrow_date, datetime.min.time().replace(hour=end_hour, minute=end_minute))
+        end_time = dt_util.as_local(dt_util.as_utc(end_time)) + timedelta(minutes=15)
+
+        return {
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "average_price": round(avg_price, 4),
+            "duration_minutes": 60,
+        }
+
+    @property
+    def icon(self):
+        """Ikona."""
+        if self.is_on:
+            return "mdi:calendar-arrow-right"
+        return "mdi:calendar-outline"
+
+
+class SKSpotCheapest8BlockTomorrowSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor pro indikaci nejlevnějšího bloku 8 intervalů (2 hodiny) pouze pro zítřek."""
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_name = "SK Spot Cheapest 8 Block Tomorrow"
+        self._attr_unique_id = f"{entry.entry_id}_cheapest_8_block_tomorrow"
+
+    @property
+    def is_on(self) -> bool:
+        """Vrať True pokud jsme v nejlevnějším 8-intervalovém bloku zítřka."""
+        if self.coordinator.data is None:
+            return False
+
+        tomorrow_prices = self.coordinator.data.get("tomorrow_prices", {})
+        tomorrow_available = self.coordinator.data.get("tomorrow_available", False)
+
+        if not tomorrow_available or not tomorrow_prices:
+            return False
+
+        cheapest = find_cheapest_block(tomorrow_prices, 8)
+        if not cheapest:
+            return False
+
+        start_idx, end_idx, _ = cheapest
+
+        now = dt_util.now()
+        current_hour = now.hour
+        current_minute = now.minute
+        current_idx = (current_hour * 4) + (current_minute // 15)
+
+        today = now.date()
+        if self.coordinator._last_download_date and self.coordinator._last_download_date >= today:
+            return False
+
+        return start_idx <= current_idx <= end_idx
+
+    @property
+    def extra_state_attributes(self):
+        """Atributy."""
+        if self.coordinator.data is None:
+            return {}
+
+        tomorrow_prices = self.coordinator.data.get("tomorrow_prices", {})
+        tomorrow_available = self.coordinator.data.get("tomorrow_available", False)
+
+        if not tomorrow_available or not tomorrow_prices:
+            return {}
+
+        cheapest = find_cheapest_block(tomorrow_prices, 8)
+        if not cheapest:
+            return {}
+
+        start_idx, end_idx, avg_price = cheapest
+
+        now = dt_util.now()
+        tomorrow_date = now.date() + timedelta(days=1)
+
+        start_hour = start_idx // 4
+        start_minute = (start_idx % 4) * 15
+        end_hour = end_idx // 4
+        end_minute = (end_idx % 4) * 15
+
+        start_time = datetime.combine(tomorrow_date, datetime.min.time().replace(hour=start_hour, minute=start_minute))
+        start_time = dt_util.as_local(dt_util.as_utc(start_time))
+
+        end_time = datetime.combine(tomorrow_date, datetime.min.time().replace(hour=end_hour, minute=end_minute))
+        end_time = dt_util.as_local(dt_util.as_utc(end_time)) + timedelta(minutes=15)
+
+        return {
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "average_price": round(avg_price, 4),
+            "duration_minutes": 120,
+        }
+
+    @property
+    def icon(self):
+        """Ikona."""
+        if self.is_on:
+            return "mdi:calendar-arrow-right"
+        return "mdi:calendar-outline"
