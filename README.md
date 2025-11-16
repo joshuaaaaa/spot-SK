@@ -10,21 +10,42 @@ Integrace pro Home Assistant zobrazující aktuální spotové ceny elektřiny z
 - **Data pro dnes a zítra**: Pokud jsou zítřejší ceny dostupné (obvykle od 13:00-14:00)
 - **Volba jednotek**: EUR/MWh nebo EUR/kWh
 - **Atributy s časovými razítky**: Pro snadné použití v automatizacích
-- **Binary sensory**:
-  - 📅 **Tomorrow Data**: Indikace dostupnosti zítřejších dat
-  - ⚡ **Cheapest 4 Block**: Nejlevnější souvislý blok 1 hodiny (dnes+zítra)
-  - ⚡ **Cheapest 8 Block**: Nejlevnější souvislý blok 2 hodin (dnes+zítra)
-  - 📅⚡ **Cheapest 4 Block Tomorrow**: Nejlevnější 1 hodina pouze ze zítřka
-  - 📅⚡ **Cheapest 8 Block Tomorrow**: Nejlevnější 2 hodiny pouze ze zítřka
+
+### Sensory pro spotové ceny
+- 💰 **Current Price**: Aktuální spotová cena
+- 📊 **Current Rank**: Ranking aktuálního bloku (1-96, kde 1=nejlevnější, 96=nejdražší)
+- 📉 **Daily Min/Max/Average**: Statistiky dnešních cen
+
+### Binary sensory pro automatizace
+- 📅 **Tomorrow Data**: Indikace dostupnosti zítřejších dat
+- ⚡ **Cheapest Blocks**: Nejlevnější souvislé bloky 1h/2h (dnes+zítra)
+- 📅⚡ **Cheapest Blocks Tomorrow**: Nejlevnější bloky pouze ze zítřka
+- 💎 **Top 5/10 Expensive**: Pro automatizaci prodeje elektřiny
+- 🔥 **Bottom 5/10 Cheap**: Pro automatizaci spotřeby v nejlevnějších blocích
 
 ## Sensory
 
 Po instalaci budete mít k dispozici:
 
-### Sensor
+### Hlavní sensory
 - `sensor.sk_spot_price` - Aktuální spotová cena
   - Stav: Cena v EUR/MWh nebo EUR/kWh (podle nastavení)
   - Atributy: Všechny ceny pro dnes + zítra (až 192 záznamů)
+
+### Ranking sensory
+- `sensor.sk_spot_current_rank` - Ranking aktuálního 15min bloku
+  - Stav: Číslo 1-96 (1 = nejlevnější, 96 = nejdražší)
+  - Atributy: `today_rankings`, `tomorrow_rankings` (mapování časů na ranky)
+  - **Použití**: Umožňuje jednoduché automatizace typu "prodávej el. při ranku >= 92" (top 5 nejdražších bloků)
+
+### Statistické sensory
+- `sensor.sk_spot_daily_min` - Minimální cena dnes
+  - Atributy: `time` (kdy nastane), `interval_index`
+
+- `sensor.sk_spot_daily_max` - Maximální cena dnes
+  - Atributy: `time` (kdy nastane), `interval_index`
+
+- `sensor.sk_spot_daily_average` - Průměrná cena dnes
 
 ### Binary Sensory
 - `binary_sensor.sk_spot_tomorrow_data` - Dostupnost zítřejších dat
@@ -49,6 +70,25 @@ Po instalaci budete mít k dispozici:
   - ON: Právě probíhá nejlevnější souvislý blok 8 intervalů (2 hodiny) pouze ze zítřejších dat
   - OFF: Pokud zítřejší data nejsou dostupná nebo nejsme v bloku
   - Atributy: `start_time`, `end_time`, `average_price`, `duration_minutes`
+
+### Ranking Binary Sensory
+- `binary_sensor.sk_spot_in_top_5_expensive` - Top 5 nejdražších bloků
+  - ON: Jsme v top 5 nejdražších 15min blocích dnes
+  - Atributy: `current_rank`, `total_blocks`, `threshold_rank`
+  - **Použití**: Spustit prodej elektřiny do sítě
+
+- `binary_sensor.sk_spot_in_top_10_expensive` - Top 10 nejdražších bloků
+  - ON: Jsme v top 10 nejdražších 15min blocích dnes
+  - Atributy: `current_rank`, `total_blocks`, `threshold_rank`
+
+- `binary_sensor.sk_spot_in_bottom_5_cheap` - Bottom 5 nejlevnějších bloků
+  - ON: Jsme v bottom 5 nejlevnějších 15min blocích dnes
+  - Atributy: `current_rank`, `total_blocks`, `threshold_rank`
+  - **Použití**: Spustit spotřebiče, nabíjet baterii
+
+- `binary_sensor.sk_spot_in_bottom_10_cheap` - Bottom 10 nejlevnějších bloků
+  - ON: Jsme v bottom 10 nejlevnějších 15min blocích dnes
+  - Atributy: `current_rank`, `total_blocks`, `threshold_rank`
 
 ## Instalace (HACS)
 
@@ -215,6 +255,118 @@ automation:
         target:
           entity_id: switch.scheduled_task
 ```
+
+### Prodej elektřiny v top 5 nejdražších blocích (pomocí rankingu)
+```yaml
+automation:
+  - alias: "Prodávat elektřinu v top 5 nejdražších blocích"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.sk_spot_in_top_5_expensive
+        to: "on"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.battery_discharge_to_grid
+      - service: notify.mobile_app
+        data:
+          message: >
+            Prodej elektřiny zahájen!
+            Aktuální rank: {{ state_attr('binary_sensor.sk_spot_in_top_5_expensive', 'current_rank') }}/96
+            Cena: {{ states('sensor.sk_spot_price') }} EUR/MWh
+
+  - alias: "Zastavit prodej po top 5 blocích"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.sk_spot_in_top_5_expensive
+        to: "off"
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.battery_discharge_to_grid
+```
+
+### Spotřeba v bottom 10 nejlevnějších blocích
+```yaml
+automation:
+  - alias: "Zapnout bojler v bottom 10 nejlevnějších blocích"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.sk_spot_in_bottom_10_cheap
+        to: "on"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.water_heater
+```
+
+### Automatizace založená na ranku (custom threshold)
+```yaml
+automation:
+  - alias: "Prodávat elektřinu při ranku >= 90"
+    trigger:
+      - platform: state
+        entity_id: sensor.sk_spot_current_rank
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.sk_spot_current_rank
+        above: 89
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.sell_to_grid
+
+  - alias: "Zastavit prodej při ranku < 90"
+    trigger:
+      - platform: state
+        entity_id: sensor.sk_spot_current_rank
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.sk_spot_current_rank
+        below: 90
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.sell_to_grid
+```
+
+## Výhody rankingového systému
+
+Nový rankingový systém přináší mnoho výhod pro surfování na spotovém trhu:
+
+### 1. Jednoduché automatizace pro prodej elektřiny
+Místo složitých výpočtů stačí nastavit: "Prodávej při ranku >= 92" = top 5 nejdražších bloků
+```yaml
+condition:
+  - condition: numeric_state
+    entity_id: sensor.sk_spot_current_rank
+    above: 91  # Top 5 nejdražších
+```
+
+### 2. Flexibilní prahy
+- Top 5: rank >= 92
+- Top 10: rank >= 87
+- Top 20: rank >= 77
+- Bottom 5: rank <= 5
+- Bottom 10: rank <= 10
+
+### 3. Kombinace s dalšími podmínkami
+```yaml
+condition:
+  - condition: numeric_state
+    entity_id: sensor.sk_spot_current_rank
+    above: 91
+  - condition: state
+    entity_id: sensor.battery_level
+    above: 80
+```
+
+### 4. Přehledné atributy
+Sensor `sk_spot_current_rank` obsahuje atributy:
+- `today_rankings`: Slovník všech dnešních ranků (čas → rank)
+- `tomorrow_rankings`: Slovník všech zítřejších ranků (pokud dostupné)
+
+Umožňuje plánování: "Zítra v 10:00 bude rank 15, ideální pro nabíjení"
 
 ## Technické detaily
 

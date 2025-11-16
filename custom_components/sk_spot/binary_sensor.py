@@ -30,6 +30,11 @@ async def async_setup_entry(
         SKSpotCheapest8BlockSensor(coordinator, entry),
         SKSpotCheapest4BlockTomorrowSensor(coordinator, entry),
         SKSpotCheapest8BlockTomorrowSensor(coordinator, entry),
+        # Ranking binary sensors
+        SKSpotInTop5ExpensiveSensor(coordinator, entry),
+        SKSpotInTop10ExpensiveSensor(coordinator, entry),
+        SKSpotInBottom5CheapSensor(coordinator, entry),
+        SKSpotInBottom10CheapSensor(coordinator, entry),
     ])
 
 
@@ -519,3 +524,210 @@ class SKSpotCheapest8BlockTomorrowSensor(CoordinatorEntity, BinarySensorEntity):
         if self.is_on:
             return "mdi:calendar-arrow-right"
         return "mdi:calendar-outline"
+
+
+def get_current_rank(coordinator):
+    """Pomocná funkce pro získání aktuálního ranku."""
+    if coordinator.data is None:
+        return None
+
+    today_prices = coordinator.data.get("today_prices", {})
+    if not today_prices:
+        return None
+
+    # Zjisti aktuální index
+    now = dt_util.now()
+    current_hour = now.hour
+    current_minute = now.minute
+    current_idx = (current_hour * 4) + (current_minute // 15)
+
+    if current_idx not in today_prices:
+        return None
+
+    # Seřaď všechny dnešní ceny vzestupně
+    sorted_prices = sorted(today_prices.items(), key=lambda x: x[1])
+
+    # Najdi pozici aktuálního indexu v seřazeném seznamu
+    for rank, (idx, price) in enumerate(sorted_prices, start=1):
+        if idx == current_idx:
+            return rank
+
+    return None
+
+
+class SKSpotInTop5ExpensiveSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor - jsme v top 5 nejdražších blocích."""
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_name = "SK Spot In Top 5 Expensive"
+        self._attr_unique_id = f"{entry.entry_id}_in_top_5_expensive"
+
+    @property
+    def is_on(self) -> bool:
+        """Vrať True pokud jsme v top 5 nejdražších."""
+        rank = get_current_rank(self.coordinator)
+        if rank is None:
+            return False
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        total_blocks = len(today_prices)
+
+        # Top 5 = ranky od (total - 4) do total
+        return rank >= (total_blocks - 4)
+
+    @property
+    def extra_state_attributes(self):
+        """Atributy."""
+        rank = get_current_rank(self.coordinator)
+        if rank is None:
+            return {}
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        total_blocks = len(today_prices)
+
+        return {
+            "current_rank": rank,
+            "total_blocks": total_blocks,
+            "threshold_rank": total_blocks - 4,
+        }
+
+    @property
+    def icon(self):
+        """Ikona."""
+        if self.is_on:
+            return "mdi:currency-eur-off"
+        return "mdi:currency-eur"
+
+
+class SKSpotInTop10ExpensiveSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor - jsme v top 10 nejdražších blocích."""
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_name = "SK Spot In Top 10 Expensive"
+        self._attr_unique_id = f"{entry.entry_id}_in_top_10_expensive"
+
+    @property
+    def is_on(self) -> bool:
+        """Vrať True pokud jsme v top 10 nejdražších."""
+        rank = get_current_rank(self.coordinator)
+        if rank is None:
+            return False
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        total_blocks = len(today_prices)
+
+        # Top 10 = ranky od (total - 9) do total
+        return rank >= (total_blocks - 9)
+
+    @property
+    def extra_state_attributes(self):
+        """Atributy."""
+        rank = get_current_rank(self.coordinator)
+        if rank is None:
+            return {}
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        total_blocks = len(today_prices)
+
+        return {
+            "current_rank": rank,
+            "total_blocks": total_blocks,
+            "threshold_rank": total_blocks - 9,
+        }
+
+    @property
+    def icon(self):
+        """Ikona."""
+        if self.is_on:
+            return "mdi:currency-eur-off"
+        return "mdi:currency-eur"
+
+
+class SKSpotInBottom5CheapSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor - jsme v bottom 5 nejlevnějších blocích."""
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_name = "SK Spot In Bottom 5 Cheap"
+        self._attr_unique_id = f"{entry.entry_id}_in_bottom_5_cheap"
+
+    @property
+    def is_on(self) -> bool:
+        """Vrať True pokud jsme v bottom 5 nejlevnějších."""
+        rank = get_current_rank(self.coordinator)
+        if rank is None:
+            return False
+
+        # Bottom 5 = ranky 1-5
+        return rank <= 5
+
+    @property
+    def extra_state_attributes(self):
+        """Atributy."""
+        rank = get_current_rank(self.coordinator)
+        if rank is None:
+            return {}
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        total_blocks = len(today_prices)
+
+        return {
+            "current_rank": rank,
+            "total_blocks": total_blocks,
+            "threshold_rank": 5,
+        }
+
+    @property
+    def icon(self):
+        """Ikona."""
+        if self.is_on:
+            return "mdi:sale"
+        return "mdi:tag-outline"
+
+
+class SKSpotInBottom10CheapSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor - jsme v bottom 10 nejlevnějších blocích."""
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_name = "SK Spot In Bottom 10 Cheap"
+        self._attr_unique_id = f"{entry.entry_id}_in_bottom_10_cheap"
+
+    @property
+    def is_on(self) -> bool:
+        """Vrať True pokud jsme v bottom 10 nejlevnějších."""
+        rank = get_current_rank(self.coordinator)
+        if rank is None:
+            return False
+
+        # Bottom 10 = ranky 1-10
+        return rank <= 10
+
+    @property
+    def extra_state_attributes(self):
+        """Atributy."""
+        rank = get_current_rank(self.coordinator)
+        if rank is None:
+            return {}
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        total_blocks = len(today_prices)
+
+        return {
+            "current_rank": rank,
+            "total_blocks": total_blocks,
+            "threshold_rank": 10,
+        }
+
+    @property
+    def icon(self):
+        """Ikona."""
+        if self.is_on:
+            return "mdi:sale"
+        return "mdi:tag-outline"
