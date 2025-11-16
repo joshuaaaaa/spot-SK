@@ -21,7 +21,13 @@ async def async_setup_entry(
 ) -> None:
     """Setup senzoru."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([SKSpotSensor(coordinator, entry)])
+    async_add_entities([
+        SKSpotSensor(coordinator, entry),
+        SKSpotCurrentRankSensor(coordinator, entry),
+        SKSpotDailyMinSensor(coordinator, entry),
+        SKSpotDailyMaxSensor(coordinator, entry),
+        SKSpotDailyAverageSensor(coordinator, entry),
+    ])
 
 
 class SKSpotSensor(CoordinatorEntity, SensorEntity):
@@ -117,3 +123,268 @@ class SKSpotSensor(CoordinatorEntity, SensorEntity):
         _LOGGER.debug("Atributy obsahují %d záznamů (dnes: %d, zítra: %d, zítra dostupné: %s)",
                      len(all_prices), len(today_prices), len(tomorrow_prices), tomorrow_available)
         return all_prices
+
+
+class SKSpotCurrentRankSensor(CoordinatorEntity, SensorEntity):
+    """Sensor zobrazující ranking aktuálního bloku (1=nejlevnější, 96=nejdražší)."""
+
+    _attr_name = "SK Spot Current Rank"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:podium"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_current_rank"
+        self._entry = entry
+
+    @property
+    def native_unit_of_measurement(self):
+        """Jednotka měření."""
+        return None
+
+    @property
+    def native_value(self):
+        """Aktuální ranking (1-96)."""
+        if self.coordinator.data is None:
+            return None
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        if not today_prices:
+            return None
+
+        # Zjisti aktuální index
+        now = dt_util.now()
+        current_hour = now.hour
+        current_minute = now.minute
+        current_idx = (current_hour * 4) + (current_minute // 15)
+
+        if current_idx not in today_prices:
+            return None
+
+        current_price = today_prices[current_idx]
+
+        # Seřaď všechny dnešní ceny vzestupně
+        sorted_prices = sorted(today_prices.items(), key=lambda x: x[1])
+
+        # Najdi pozici aktuálního indexu v seřazeném seznamu
+        for rank, (idx, price) in enumerate(sorted_prices, start=1):
+            if idx == current_idx:
+                return rank
+
+        return None
+
+    @property
+    def extra_state_attributes(self):
+        """Atributy s rankingy všech bloků."""
+        if self.coordinator.data is None:
+            return {}
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        tomorrow_prices = self.coordinator.data.get("tomorrow_prices", {})
+        tomorrow_available = self.coordinator.data.get("tomorrow_available", False)
+
+        now = dt_util.now()
+        today_date = now.date()
+        tomorrow_date = today_date + timedelta(days=1)
+
+        attrs = {}
+
+        # Rankingy pro dnes
+        if today_prices:
+            sorted_today = sorted(today_prices.items(), key=lambda x: x[1])
+            today_rankings = {}
+            for rank, (idx, price) in enumerate(sorted_today, start=1):
+                hour = idx // 4
+                minute = (idx % 4) * 15
+                dt = datetime.combine(today_date, time(hour, minute))
+                dt = dt_util.as_local(dt_util.as_utc(dt))
+                iso_time = dt.isoformat()
+                today_rankings[iso_time] = rank
+
+            attrs["today_rankings"] = today_rankings
+
+        # Rankingy pro zítra (pokud jsou dostupné)
+        if tomorrow_available and tomorrow_prices and now.time() >= time(13, 0):
+            sorted_tomorrow = sorted(tomorrow_prices.items(), key=lambda x: x[1])
+            tomorrow_rankings = {}
+            for rank, (idx, price) in enumerate(sorted_tomorrow, start=1):
+                hour = idx // 4
+                minute = (idx % 4) * 15
+                dt = datetime.combine(tomorrow_date, time(hour, minute))
+                dt = dt_util.as_local(dt_util.as_utc(dt))
+                iso_time = dt.isoformat()
+                tomorrow_rankings[iso_time] = rank
+
+            attrs["tomorrow_rankings"] = tomorrow_rankings
+
+        return attrs
+
+
+class SKSpotDailyMinSensor(CoordinatorEntity, SensorEntity):
+    """Sensor zobrazující minimální cenu dnes."""
+
+    _attr_name = "SK Spot Daily Min"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:arrow-down-bold"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_daily_min"
+        self._entry = entry
+        self._unit = entry.data.get(CONF_UNIT, UNIT_MWH)
+
+    @property
+    def native_unit_of_measurement(self):
+        """Jednotka měření."""
+        if self._unit == UNIT_KWH:
+            return "EUR/kWh"
+        return "EUR/MWh"
+
+    @property
+    def native_value(self):
+        """Minimální cena dnes."""
+        if self.coordinator.data is None:
+            return None
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        if not today_prices:
+            return None
+
+        min_price = min(today_prices.values())
+
+        if self._unit == UNIT_KWH:
+            return round(min_price / 1000, 6)
+
+        return round(min_price, 2)
+
+    @property
+    def extra_state_attributes(self):
+        """Atributy."""
+        if self.coordinator.data is None:
+            return {}
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        if not today_prices:
+            return {}
+
+        min_price = min(today_prices.values())
+        min_idx = [idx for idx, price in today_prices.items() if price == min_price][0]
+
+        now = dt_util.now()
+        today_date = now.date()
+
+        hour = min_idx // 4
+        minute = (min_idx % 4) * 15
+        dt = datetime.combine(today_date, time(hour, minute))
+        dt = dt_util.as_local(dt_util.as_utc(dt))
+
+        return {
+            "time": dt.isoformat(),
+            "interval_index": min_idx,
+        }
+
+
+class SKSpotDailyMaxSensor(CoordinatorEntity, SensorEntity):
+    """Sensor zobrazující maximální cenu dnes."""
+
+    _attr_name = "SK Spot Daily Max"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:arrow-up-bold"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_daily_max"
+        self._entry = entry
+        self._unit = entry.data.get(CONF_UNIT, UNIT_MWH)
+
+    @property
+    def native_unit_of_measurement(self):
+        """Jednotka měření."""
+        if self._unit == UNIT_KWH:
+            return "EUR/kWh"
+        return "EUR/MWh"
+
+    @property
+    def native_value(self):
+        """Maximální cena dnes."""
+        if self.coordinator.data is None:
+            return None
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        if not today_prices:
+            return None
+
+        max_price = max(today_prices.values())
+
+        if self._unit == UNIT_KWH:
+            return round(max_price / 1000, 6)
+
+        return round(max_price, 2)
+
+    @property
+    def extra_state_attributes(self):
+        """Atributy."""
+        if self.coordinator.data is None:
+            return {}
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        if not today_prices:
+            return {}
+
+        max_price = max(today_prices.values())
+        max_idx = [idx for idx, price in today_prices.items() if price == max_price][0]
+
+        now = dt_util.now()
+        today_date = now.date()
+
+        hour = max_idx // 4
+        minute = (max_idx % 4) * 15
+        dt = datetime.combine(today_date, time(hour, minute))
+        dt = dt_util.as_local(dt_util.as_utc(dt))
+
+        return {
+            "time": dt.isoformat(),
+            "interval_index": max_idx,
+        }
+
+
+class SKSpotDailyAverageSensor(CoordinatorEntity, SensorEntity):
+    """Sensor zobrazující průměrnou cenu dnes."""
+
+    _attr_name = "SK Spot Daily Average"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:chart-line"
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Init."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_daily_average"
+        self._entry = entry
+        self._unit = entry.data.get(CONF_UNIT, UNIT_MWH)
+
+    @property
+    def native_unit_of_measurement(self):
+        """Jednotka měření."""
+        if self._unit == UNIT_KWH:
+            return "EUR/kWh"
+        return "EUR/MWh"
+
+    @property
+    def native_value(self):
+        """Průměrná cena dnes."""
+        if self.coordinator.data is None:
+            return None
+
+        today_prices = self.coordinator.data.get("today_prices", {})
+        if not today_prices:
+            return None
+
+        avg_price = sum(today_prices.values()) / len(today_prices)
+
+        if self._unit == UNIT_KWH:
+            return round(avg_price / 1000, 6)
+
+        return round(avg_price, 2)
