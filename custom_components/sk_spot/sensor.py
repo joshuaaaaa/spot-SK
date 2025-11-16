@@ -164,15 +164,12 @@ class SKSpotCurrentRankSensor(CoordinatorEntity, SensorEntity):
 
         current_price = today_prices[current_idx]
 
-        # Seřaď všechny dnešní ceny vzestupně
-        sorted_prices = sorted(today_prices.items(), key=lambda x: x[1])
+        # Spočítej kolik bloků má nižší cenu (standard ranking)
+        # Pokud je více bloků se stejnou cenou, všechny mají stejný rank
+        lower_count = sum(1 for price in today_prices.values() if price < current_price)
 
-        # Najdi pozici aktuálního indexu v seřazeném seznamu
-        for rank, (idx, price) in enumerate(sorted_prices, start=1):
-            if idx == current_idx:
-                return rank
-
-        return None
+        # Rank je počet bloků s nižší cenou + 1
+        return lower_count + 1
 
     @property
     def extra_state_attributes(self):
@@ -192,9 +189,11 @@ class SKSpotCurrentRankSensor(CoordinatorEntity, SensorEntity):
 
         # Rankingy pro dnes
         if today_prices:
-            sorted_today = sorted(today_prices.items(), key=lambda x: x[1])
             today_rankings = {}
-            for rank, (idx, price) in enumerate(sorted_today, start=1):
+            for idx, price in today_prices.items():
+                # Standard ranking: spočítej kolik bloků má nižší cenu
+                rank = sum(1 for p in today_prices.values() if p < price) + 1
+
                 hour = idx // 4
                 minute = (idx % 4) * 15
                 dt = datetime.combine(today_date, time(hour, minute))
@@ -206,9 +205,11 @@ class SKSpotCurrentRankSensor(CoordinatorEntity, SensorEntity):
 
         # Rankingy pro zítra (pokud jsou dostupné)
         if tomorrow_available and tomorrow_prices and now.time() >= time(13, 0):
-            sorted_tomorrow = sorted(tomorrow_prices.items(), key=lambda x: x[1])
             tomorrow_rankings = {}
-            for rank, (idx, price) in enumerate(sorted_tomorrow, start=1):
+            for idx, price in tomorrow_prices.items():
+                # Standard ranking: spočítej kolik bloků má nižší cenu
+                rank = sum(1 for p in tomorrow_prices.values() if p < price) + 1
+
                 hour = idx // 4
                 minute = (idx % 4) * 15
                 dt = datetime.combine(tomorrow_date, time(hour, minute))

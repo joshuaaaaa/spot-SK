@@ -544,15 +544,14 @@ def get_current_rank(coordinator):
     if current_idx not in today_prices:
         return None
 
-    # Seřaď všechny dnešní ceny vzestupně
-    sorted_prices = sorted(today_prices.items(), key=lambda x: x[1])
+    current_price = today_prices[current_idx]
 
-    # Najdi pozici aktuálního indexu v seřazeném seznamu
-    for rank, (idx, price) in enumerate(sorted_prices, start=1):
-        if idx == current_idx:
-            return rank
+    # Spočítej kolik bloků má nižší cenu (standard ranking)
+    # Pokud je více bloků se stejnou cenou, všechny mají stejný rank
+    lower_count = sum(1 for price in today_prices.values() if price < current_price)
 
-    return None
+    # Rank je počet bloků s nižší cenou + 1
+    return lower_count + 1
 
 
 class SKSpotInTop5ExpensiveSensor(CoordinatorEntity, BinarySensorEntity):
