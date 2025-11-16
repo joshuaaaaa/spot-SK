@@ -37,6 +37,7 @@ Po instalaci budete mít k dispozici:
   - Stav: Číslo 1-96 (1 = nejlevnější, 96 = nejdražší)
   - Atributy: `today_rankings`, `tomorrow_rankings` (mapování časů na ranky)
   - **Použití**: Umožňuje jednoduché automatizace typu "prodávej el. při ranku >= 92" (top 5 nejdražších bloků)
+  - **Poznámka**: Bloky se stejnou cenou mají stejný rank (standard ranking)
 
 ### Statistické sensory
 - `sensor.sk_spot_daily_min` - Minimální cena dnes
@@ -367,6 +368,12 @@ Sensor `sk_spot_current_rank` obsahuje atributy:
 - `tomorrow_rankings`: Slovník všech zítřejších ranků (pokud dostupné)
 
 Umožňuje plánování: "Zítra v 10:00 bude rank 15, ideální pro nabíjení"
+
+### 5. Standard ranking pro stejné ceny
+Pokud mají bloky stejnou cenu, mají stejný rank:
+- Například: 2 bloky s cenou 100 EUR → oba mají rank 1
+- Další blok s cenou 150 EUR → má rank 3 (přeskočí rank 2)
+- Výhoda: Pokud je více bloků s nejnižší cenou, všechny budou mít rank 1
 
 ## Technické detaily
 
