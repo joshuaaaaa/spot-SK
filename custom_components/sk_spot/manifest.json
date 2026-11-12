@@ -5,6 +5,6 @@
   "config_flow": true,
   "documentation": "",
   "requirements": ["openpyxl==3.1.2"],
-  "version": "1.0.0",
+  "version": "1.0.1",
   "iot_class": "cloud_polling"
 }
